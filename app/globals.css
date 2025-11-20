@@ -1,12 +1,84 @@
 @import url("https://cdn.syncfusion.com/ej2/tailwind.css");
-
 @import "tailwindcss";
-/* @import '../../node_modules/@syncfusion/ej2-base/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-icons/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-buttons/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-splitbuttons/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-inputs/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-lists/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-navigations/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-popups/styles/bootstrap5.css';
-@import '../../node_modules/@syncfusion/ej2-richtexteditor/styles/bootstrap5.css'; */
+
+.a4-page {
+    width: 210mm;
+    height: 297mm;
+    min-height: 297mm;
+    margin: 0 auto;
+    background: white;
+    padding: 20mm;
+    box-sizing: border-box;
+    border: 1px solid #ccc;
+    box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+}
+
+.a4-page .e-rte-content,
+.a4-page .e-content {
+    height: calc(297mm - 40mm);
+    overflow-y: auto;
+}
+
+
+/* Custom Editor */
+
+/* Page look and feel */
+.page {
+    margin: 12px auto;
+    background: white;
+    border: 1px solid #d0d0d0;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.06);
+    display: block;
+    /* width/height are set inline in the component (mm values) */
+    position: relative;
+}
+
+/* Inner content area */
+.page .page-content {
+    padding: 20mm;
+    /* PAGE_PADDING_MM */
+    height: calc(297mm - 40mm);
+    /* A4 height - padding*2 */
+    /* do not scroll inside a page: we move overflow to new pages */
+    overflow: visible;
+    outline: none;
+    /* Make default text look nice */
+    font-family: "Times New Roman", Georgia, serif;
+    font-size: 14px;
+    line-height: 1.4;
+    min-height: 1px;
+}
+
+/* Optional: small focus effect on the active page */
+.page .page-content:focus {
+    box-shadow: inset 0 0 0 2px rgba(100, 150, 255, 0.08);
+}
+
+/* Editor background around pages */
+.mp-editor {
+    display: block;
+}
+
+/* basic toolbar buttons */
+button {
+    padding: 4px 8px;
+    border: 1px solid #ccc;
+    background: white;
+    cursor: pointer;
+    border-radius: 4px;
+}
+
+button:hover {
+    background: #fafafa;
+}
+
+select {
+    padding: 4px;
+}
+
+input[type="color"] {
+    width: 30px;
+    height: 30px;
+    border: none;
+    padding: 0;
+}

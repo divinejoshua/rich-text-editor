@@ -18,12 +18,17 @@ export default function Home() {
       'CreateLink', 'Image', '|', 'ClearFormat', 'Print',
       'SourceCode', 'FullScreen', '|', 'Undo', 'Redo'
     ],
-    type: 'MultiRow'
+    type: 'MultiRow',
+    enableFloating: true,
   };
   return (
     <div className="App">
       <h1 className="text-2xl font-bold">Rich Text Editor</h1>
-      <RichTextEditorComponent height={450} value={rteValue} toolbarSettings={toolbarSettings}>
+      <RichTextEditorComponent
+        className="a4-page"
+        value={rteValue}
+        toolbarSettings={toolbarSettings}
+      >
         <Inject services={[Toolbar, Image, Link, HtmlEditor, QuickToolbar]} />
       </RichTextEditorComponent>
     </div>
