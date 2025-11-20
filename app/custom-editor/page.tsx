@@ -1,168 +1,288 @@
-"use client";
-import React, { useEffect, useRef } from "react";
+// PaginatedSyncfusionRTE.tsx
+// Drop-in Next.js client component using Syncfusion Rich Text Editor
+// Option 2 - Fully Paginated Syncfusion Editor (advanced)
+// Features:
+// - Keeps Syncfusion RTE toolbar and features
+// - Replaces the internal editable area with A4 "page" DIVs (210mm x 297mm)
+// - Detects overflow and automatically creates new pages, moving overflowing nodes
+// - Handles typing, paste, formatting via document.execCommand (keeps Syncfusion toolbar functionality)
+// - Basic export-to-HTML helper
+//
+// Usage:
+// import PaginatedSyncfusionRTE from './PaginatedSyncfusionRTE';
+// <PaginatedSyncfusionRTE initialValue={'<p>Hello</p>'} />
 
-/**
- * Minimal Google-Docs-style multi-page editor (A4 pages)
- * - contentEditable pages
- * - toolbar uses document.execCommand for simplicity
- * - auto-creates new pages when content overflows
- *
- * Drop in: <MultiPageEditor />
- */
+'use client';
 
-const A4_WIDTH_MM = 210;
-const A4_HEIGHT_MM = 297;
-const PAGE_PADDING_MM = 20; // same as CSS
+import React, { useEffect, useRef } from 'react';
+import {
+    RichTextEditorComponent,
+    Toolbar,
+    Image,
+    Link,
+    HtmlEditor,
+    QuickToolbar,
+    Inject,
+} from '@syncfusion/ej2-react-richtexteditor';
+import { registerLicense } from '@syncfusion/ej2-base';
 
-function mmToPx(mm: number) {
-    return Math.round((mm * 96) / 25.4); // 96 DPI
-}
+const LICENSE_KEY = process.env.NEXT_PUBLIC_SYNCFUSION_LICENSE_KEY || "";
+registerLicense(LICENSE_KEY);
 
-export default function MultiPageEditor() {
-    const editorRef = useRef<HTMLDivElement | null>(null);
+type Props = {
+    initialValue?: string;
+    toolbarSettings?: any;
+};
 
-    // maximum content height inside page-content (px)
-    const maxContentHeight = mmToPx(A4_HEIGHT_MM - PAGE_PADDING_MM * 2);
+export default function PaginatedSyncfusionRTE({ initialValue = '<p></p>', toolbarSettings }: Props) {
+    const rteRef = useRef<RichTextEditorComponent | null>(null);
+    const pagesContainerRef = useRef<HTMLDivElement | null>(null);
+    const observerRef = useRef<MutationObserver | null>(null);
 
+    // Inject A4 page styles
     useEffect(() => {
-        const editor = editorRef.current;
-        if (!editor) return;
+        const css = `
+      .psr-wrapper { padding: 12px; background: #f3f4f6; min-height: 100vh; }
+      .psr-rte-host { max-width: 100%; margin: 0 auto; }
+      .psr-pages { display:flex; flex-direction:column; gap:18px; align-items:center; padding-bottom:60px; }
+      .psr-page { width:210mm; height:297mm; background:white; box-shadow:0 4px 10px rgba(0,0,0,0.06); border:1px solid #e5e7eb; box-sizing:border-box; padding:20mm; position:relative; }
+      .psr-page-content { width:100%; height: calc(297mm - 40mm); overflow:visible; outline:none; }
+      .psr-page p { margin: 0 0 1em 0; }
+    `;
+        const s = document.createElement('style');
+        s.id = 'psr-styles';
+        s.innerHTML = css;
+        document.head.appendChild(s);
+        return () => { const el = document.getElementById('psr-styles'); if (el) el.remove(); };
+    }, []);
 
-        // initialize with one page
-        if (editor.querySelectorAll(".page").length === 0) {
-            const page = createPage();
-            const content = page.querySelector<HTMLDivElement>(".page-content")!;
-            content.innerHTML = `<p><br></p>`; // initial empty line
-            editor.appendChild(page);
-            placeCaretAtEnd(content);
+    // After RTE is created, replace its content container with paginated pages
+    const onCreated = () => {
+        // Access the RTE content element (DIV mode)
+        // syncfusion sets .e-rte-content inside the component
+        const rteElem = rteRef.current?.element as HTMLElement | undefined;
+        if (!rteElem) return;
+
+        // find the editable content wrapper used by Syncfusion
+        const rteContent = rteElem.querySelector('.e-rte-content') as HTMLElement | null;
+        if (!rteContent) {
+            console.warn('PaginatedSyncfusionRTE: could not find .e-rte-content');
+            return;
         }
 
-        // event listeners
-        function onInput(e: Event) {
-            const target = e.target as HTMLElement | null;
-            const pageContent = target?.closest(".page-content") as HTMLElement | null;
-            // If event not in a page-content, ignore
-            if (!pageContent) return;
+        // Clear existing content and insert our pages container
+        rteContent.innerHTML = '';
+        const pagesWrapper = document.createElement('div');
+        pagesWrapper.className = 'psr-pages';
+        pagesWrapper.setAttribute('contenteditable', 'false'); // pages container itself not editable
 
-            autoPaginate(pageContent);
-        }
+        // create initial page
+        const page = createPage(1);
+        const content = page.querySelector('.psr-page-content') as HTMLElement;
+        content.innerHTML = initialValue;
 
-        // Handle keyup for immediate punctuation/enter events
-        function onKeyUp(e: KeyboardEvent) {
-            const target = e.target as HTMLElement | null;
-            const pageContent = target?.closest(".page-content") as HTMLElement | null;
-            if (!pageContent) return;
-            // small delay to allow DOM updates
-            setTimeout(() => autoPaginate(pageContent), 0);
-        }
+        pagesWrapper.appendChild(page);
+        rteContent.appendChild(pagesWrapper);
 
-        // handle paste as well
-        function onPaste(e: ClipboardEvent) {
-            const target = e.target as HTMLElement | null;
-            const pageContent = target?.closest(".page-content") as HTMLElement | null;
-            if (!pageContent) return;
-            setTimeout(() => autoPaginate(pageContent), 10);
-        }
+        // Save ref
+        pagesContainerRef.current = pagesWrapper;
 
-        editor.addEventListener("input", onInput, true);
-        editor.addEventListener("keyup", onKeyUp, true);
-        editor.addEventListener("paste", onPaste, true);
+        // Make page content editable and focusable
+        attachPageEventHandlers(pagesWrapper);
 
-        return () => {
-            editor.removeEventListener("input", onInput, true);
-            editor.removeEventListener("keyup", onKeyUp, true);
-            editor.removeEventListener("paste", onPaste, true);
-        };
-    }, [maxContentHeight]);
+        // Setup MutationObserver to watch changes and paginate
+        setupObserver();
 
-    // Create page DOM element
-    function createPage(): HTMLDivElement {
-        const page = document.createElement("div");
-        page.className = "page";
-        page.style.width = `${A4_WIDTH_MM}mm`;
-        page.style.height = `${A4_HEIGHT_MM}mm`;
-        page.style.boxSizing = "border-box";
+        // Initial paginate in case initial content overflows
+        setTimeout(() => checkAndPaginate(), 50);
+    };
 
-        const pageContent = document.createElement("div");
-        pageContent.className = "page-content";
-        pageContent.setAttribute("contentEditable", "true");
-        pageContent.setAttribute("spellCheck", "true");
-        // ensure block formatting context
-        pageContent.style.minHeight = "1px";
+    // Create page DOM
+    function createPage(pageNumber: number) {
+        const page = document.createElement('div');
+        page.className = 'psr-page';
+        page.style.position = 'relative';
 
-        page.appendChild(pageContent);
+        const content = document.createElement('div');
+        content.className = 'psr-page-content';
+        content.setAttribute('contenteditable', 'true');
+        content.setAttribute('data-page', String(pageNumber));
+
+        page.appendChild(content);
         return page;
     }
 
-    // Move overflowing nodes from sourcePageContent to a newly created next page
-    function autoPaginate(sourcePageContent: HTMLElement) {
-        const editor = editorRef.current!;
-        // find the page container for this content
-        const page = sourcePageContent.closest(".page") as HTMLElement | null;
-        if (!page) return;
-
-        // while page content is taller than allowed, create/move to next
-        if (sourcePageContent.scrollHeight <= maxContentHeight) return;
-
-        // Ensure there is a next page; if not, create it
-        let nextPage = page.nextElementSibling as HTMLElement | null;
-        if (!nextPage || !nextPage.classList.contains("page")) {
-            nextPage = createPage();
-            editor.insertBefore(nextPage, page.nextSibling);
-            // ensure it has at least one paragraph
-            const nextContent = nextPage.querySelector<HTMLElement>(".page-content")!;
-            if (!nextContent.innerHTML) nextContent.innerHTML = "<p><br></p>";
-        }
-
-        const nextContent = nextPage.querySelector<HTMLElement>(".page-content")!;
-        // Move nodes from the end of source -> start of next until it fits
-        // We prefer moving whole block elements (p, div, ul, ol, table, img, hr)
-        // If the last node is a text node, we will split it.
-        while (sourcePageContent.scrollHeight > maxContentHeight) {
-            const last = sourcePageContent.lastChild;
-            if (!last) break;
-
-            // If last is a text node with lots of chars, try splitting at midpoint
-            if (last.nodeType === Node.TEXT_NODE) {
-                const txt = last.textContent || "";
-                if (txt.length > 20) {
-                    const splitIndex = Math.floor(txt.length / 2);
-                    const left = txt.slice(0, splitIndex);
-                    const right = txt.slice(splitIndex);
-                    last.textContent = left;
-                    const newNode = document.createTextNode(right);
-                    sourcePageContent.appendChild(newNode); // temporary position
-                    // then move newNode to next
-                    nextContent.insertBefore(newNode, nextContent.firstChild);
-                } else {
-                    // short text node, move whole node
-                    nextContent.insertBefore(last, nextContent.firstChild);
-                }
-            } else if ((last as Element).nodeName === "BR" && sourcePageContent.childNodes.length === 1) {
-                // avoid removing the last BR entirely
-                break;
-            } else {
-                // move the whole element
-                nextContent.insertBefore(last, nextContent.firstChild);
+    function attachPageEventHandlers(pagesWrapper: HTMLDivElement) {
+        // Delegate input events from pages container
+        pagesWrapper.addEventListener('input', () => checkAndPaginate());
+        pagesWrapper.addEventListener('keydown', (ev) => {
+            // handle Tab to insert spaces
+            if ((ev as KeyboardEvent).key === 'Tab') {
+                ev.preventDefault();
+                document.execCommand('insertText', false, '  ');
+                return;
             }
+            // small timeout to allow formatting to apply then paginate
+            setTimeout(() => checkAndPaginate(), 10);
+        });
 
-            // If next became too tall (rare), keep moving until both fit
-            // Also make sure there is an empty paragraph in source if it becomes empty
-            if (sourcePageContent.childNodes.length === 0) {
-                sourcePageContent.innerHTML = "<p><br></p>";
+        pagesWrapper.addEventListener('paste', (ev) => {
+            // Allow paste then sanitize/paginate
+            setTimeout(() => checkAndPaginate(), 10);
+        });
+
+        // Ensure clicks inside editable areas put caret correctly
+        pagesWrapper.addEventListener('click', (ev) => {
+            const target = ev.target as HTMLElement;
+            const pageContent = findClosestPageContent(target);
+            if (pageContent) {
+                // focus the clicked editable area
+                (pageContent as HTMLElement).focus();
             }
-            // loop until source fits
-            // but to avoid infinite loops, break after many iterations (safety)
-        }
-
-        // finally place caret at start of next page's first child (so typing continues)
-        setTimeout(() => {
-            placeCaretAtStart(nextContent);
-        }, 0);
+        });
     }
 
-    // Place caret at end of an element
+    function findClosestPageContent(node: Node | null) {
+        while (node) {
+            if (node.nodeType === Node.ELEMENT_NODE) {
+                const el = node as HTMLElement;
+                if (el.classList && el.classList.contains('psr-page-content')) return el;
+            }
+            node = node.parentNode;
+        }
+        return null;
+    }
+
+    function mmToPx(mm: number) {
+        return mm * (96 / 25.4);
+    }
+
+    function setupObserver() {
+        if (!pagesContainerRef.current) return;
+        if (observerRef.current) observerRef.current.disconnect();
+
+        const observer = new MutationObserver(() => checkAndPaginate());
+        observer.observe(pagesContainerRef.current, { childList: true, subtree: true, characterData: true });
+        observerRef.current = observer;
+    }
+
+    function getPages() {
+        return Array.from(pagesContainerRef.current?.querySelectorAll('.psr-page') ?? []) as HTMLDivElement[];
+    }
+
+    function checkAndPaginate() {
+        const pages = getPages();
+        if (!pages.length) return;
+        const maxHeight = mmToPx(297 - 40); // page content max height in px
+
+        // Iterate pages forward and move overflow to next page
+        for (let i = 0; i < pages.length; i++) {
+            const page = pages[i];
+            const content = page.querySelector('.psr-page-content') as HTMLElement;
+            if (!content) continue;
+
+            if (content.scrollHeight > maxHeight + 1) {
+                // ensure next page exists
+                let nextPage = pages[i + 1];
+                if (!nextPage) {
+                    const p = createPage(pages.length + 1);
+                    pagesContainerRef.current!.appendChild(p);
+                    nextPage = p;
+                }
+                const nextContent = nextPage.querySelector('.psr-page-content') as HTMLElement;
+
+                moveOverflow(content, nextContent, maxHeight);
+            }
+        }
+
+        // Remove trailing empty page if exists and not the only one
+        const updated = getPages();
+        if (updated.length > 1) {
+            const last = updated[updated.length - 1];
+            const lastCnt = last.querySelector('.psr-page-content') as HTMLElement;
+            if (lastCnt && lastCnt.innerHTML.trim() === '') last.remove();
+        }
+
+        // Update page numbers data attributes
+        getPages().forEach((p, idx) => {
+            const c = p.querySelector('.psr-page-content') as HTMLElement;
+            if (c) c.setAttribute('data-page', String(idx + 1));
+        });
+    }
+
+    function moveOverflow(source: HTMLElement, target: HTMLElement, maxHeight: number) {
+        // Move last child nodes from source to the front of target until source fits
+        // If node too large, attempt to split text nodes
+        let safety = 0;
+        while (source.scrollHeight > maxHeight + 1 && source.lastChild && safety < 2000) {
+            const node = source.lastChild;
+            // Move block element or inline node
+            target.insertBefore(node, target.firstChild);
+            safety++;
+        }
+
+        // If still overflowing, try splitting last text nodes from target back to source
+        if (source.scrollHeight > maxHeight + 1) {
+            const last = source.lastChild;
+            if (last && last.nodeType === Node.TEXT_NODE) {
+                splitTextNodeToFit(last as Text, source, target, maxHeight);
+            } else if (last && last.nodeType === Node.ELEMENT_NODE) {
+                // try split deepest text node
+                const walker = document.createTreeWalker(last as HTMLElement, NodeFilter.SHOW_TEXT, null);
+                let textNode: Node | null = null;
+                while (walker.nextNode()) textNode = walker.currentNode;
+                if (textNode && textNode.nodeValue) splitTextNodeToFit(textNode as Text, source, target, maxHeight);
+            }
+        }
+    }
+
+    function splitTextNodeToFit(textNode: Text, src: HTMLElement, dst: HTMLElement, maxHeight: number) {
+        const full = textNode.nodeValue || '';
+        if (!full) return;
+        // split by words and binary search split point
+        const words = full.split(/(\s+)/);
+        let lo = 0, hi = words.length;
+        let moved = false;
+        while (lo < hi) {
+            const mid = Math.floor((lo + hi) / 2);
+            const left = words.slice(0, mid).join('');
+            const right = words.slice(mid).join('');
+            const backup = textNode.nodeValue;
+            textNode.nodeValue = left;
+            const newNode = document.createTextNode(right);
+            dst.insertBefore(newNode, dst.firstChild);
+            if (src.scrollHeight > maxHeight) {
+                // left still too big -> need to move more to dst
+                newNode.remove();
+                textNode.nodeValue = backup;
+                lo = mid + 1;
+            } else {
+                // left fits; keep split
+                moved = true;
+                hi = mid;
+            }
+        }
+        return moved;
+    }
+
+    // Toolbar proxy: execute command inside active page content
+    function execCommand(command: string, value?: string) {
+        // ensure focus on current editable area
+        const sel = window.getSelection();
+        let active = sel && sel.anchorNode ? findClosestPageContent(sel.anchorNode) as HTMLElement : null;
+        if (!active) {
+            // fallback to last page
+            const pages = getPages();
+            const last = pages[pages.length - 1];
+            active = last.querySelector('.psr-page-content') as HTMLElement;
+            placeCaretAtEnd(active);
+        }
+        document.execCommand(command, false, value);
+        setTimeout(() => checkAndPaginate(), 10);
+    }
+
     function placeCaretAtEnd(el: HTMLElement) {
+        el.focus();
         const range = document.createRange();
         range.selectNodeContents(el);
         range.collapse(false);
@@ -172,138 +292,39 @@ export default function MultiPageEditor() {
         sel.addRange(range);
     }
 
-    function placeCaretAtStart(el: HTMLElement) {
-        const range = document.createRange();
-        range.selectNodeContents(el);
-        range.collapse(true);
-        const sel = window.getSelection();
-        if (!sel) return;
-        sel.removeAllRanges();
-        sel.addRange(range);
-
-        // focus the element so typing continues
-        (el as HTMLElement).focus();
+    function exportHtml() {
+        const pages = getPages();
+        const wrapper = document.createElement('div');
+        pages.forEach((p) => {
+            const c = p.querySelector('.psr-page-content') as HTMLElement;
+            const pageWrap = document.createElement('div');
+            pageWrap.style.width = '210mm';
+            pageWrap.style.height = '297mm';
+            pageWrap.innerHTML = c.innerHTML;
+            wrapper.appendChild(pageWrap);
+        });
+        return wrapper.innerHTML;
     }
 
-    // Toolbar actions - wrappers around execCommand
-    function exec(command: string, value?: string) {
-        document.execCommand(command, false, value ?? "");
-        // After formatting, ensure we check pagination for the active page
-        const sel = window.getSelection();
-        const node = sel?.anchorNode as Node | null;
-        const pageContent = node?.parentElement?.closest(".page-content") as HTMLElement | null;
-        if (pageContent) {
-            setTimeout(() => autoPaginate(pageContent), 0);
-        }
-    }
-
-    function insertImage() {
-        const url = prompt("Image URL");
-        if (!url) return;
-        exec("insertImage", url);
-    }
-
-    function insertLink() {
-        const url = prompt("Link URL (include https://)");
-        if (!url) return;
-        exec("createLink", url);
-    }
-
-    function addPage() {
-        const editor = editorRef.current!;
-        const page = createPage();
-        const content = page.querySelector<HTMLElement>(".page-content")!;
-        content.innerHTML = "<p><br></p>";
-        editor.appendChild(page);
-        placeCaretAtStart(content);
-    }
+    // Default toolbar if none provided
+    const defaultToolbar = {
+        items: [
+            'Bold', 'Italic', 'Underline', 'StrikeThrough', '|', 'FontName', 'FontSize', 'FontColor', 'BackgroundColor', '|',
+            'Formats', 'Alignments', 'OrderedList', 'UnorderedList', '|', 'CreateLink', 'Image', '|', 'ClearFormat', 'Print', 'SourceCode', 'FullScreen', '|', 'Undo', 'Redo'
+        ],
+        type: 'MultiRow'
+    } as any;
 
     return (
-        <div>
-            {/* Toolbar */}
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
-                <button onClick={() => exec("bold")} title="Bold"><b>B</b></button>
-                <button onClick={() => exec("italic")} title="Italic"><i>I</i></button>
-                <button onClick={() => exec("underline")} title="Underline"><u>U</u></button>
-
-                <select onChange={(e) => exec("fontName", e.target.value)} defaultValue="">
-                    <option value="">Font</option>
-                    <option value="Arial">Arial</option>
-                    <option value="Georgia">Georgia</option>
-                    <option value="Times New Roman">Times New Roman</option>
-                    <option value="Courier New">Courier New</option>
-                    <option value="Verdana">Verdana</option>
-                </select>
-
-                <select
-                    onChange={(e) => {
-                        // fontSize expects 1..7 (browser mapping). We map common sizes.
-                        const sizeMap: Record<string, string> = {
-                            "10": "1",
-                            "12": "2",
-                            "14": "3",
-                            "18": "4",
-                            "24": "5",
-                            "32": "6",
-                            "48": "7",
-                        };
-                        const v = sizeMap[e.target.value] ?? "3";
-                        exec("fontSize", v);
-                    }}
-                    defaultValue=""
-                >
-                    <option value="">Size</option>
-                    <option value="10">10</option>
-                    <option value="12">12</option>
-                    <option value="14">14</option>
-                    <option value="18">18</option>
-                    <option value="24">24</option>
-                    <option value="32">32</option>
-                </select>
-
-                <input
-                    type="color"
-                    title="Text color"
-                    onChange={(e) => exec("foreColor", e.target.value)}
-                />
-                <input
-                    type="color"
-                    title="Highlight"
-                    onChange={(e) => exec("hiliteColor", e.target.value)}
-                />
-
-                <button onClick={() => exec("justifyLeft")}>Left</button>
-                <button onClick={() => exec("justifyCenter")}>Center</button>
-                <button onClick={() => exec("justifyRight")}>Right</button>
-                <button onClick={() => exec("justifyFull")}>Justify</button>
-
-                <button onClick={() => exec("insertOrderedList")}>OL</button>
-                <button onClick={() => exec("insertUnorderedList")}>UL</button>
-
-                <button onClick={() => exec("outdent")}>Outdent</button>
-                <button onClick={() => exec("indent")}>Indent</button>
-
-                <button onClick={() => exec("undo")}>Undo</button>
-                <button onClick={() => exec("redo")}>Redo</button>
-
-                <button onClick={insertImage}>Img</button>
-                <button onClick={insertLink}>Link</button>
-
-                <button onClick={addPage}>+ Page</button>
+        <div className="psr-wrapper">
+            <RichTextEditorComponent ref={rteRef} created={onCreated} toolbarSettings={toolbarSettings ?? defaultToolbar} height={'auto'}>
+                <Inject services={[Toolbar, Image, Link, HtmlEditor, QuickToolbar]} />
+            </RichTextEditorComponent>
+            {/* Note: toolbar buttons still operate via document.execCommand; you can add a custom toolbar UI too */}
+            <div style={{ marginTop: 12 }}>
+                <button onClick={() => { const html = exportHtml(); const blob = new Blob([html], { type: 'text/html' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'document.html'; a.click(); URL.revokeObjectURL(url); }}>Export HTML</button>
+                <button onClick={() => { const pages = getPages(); console.log('Pages:', pages.length); alert(`Pages: ${pages.length}`); }}>Show page count</button>
             </div>
-
-            {/* Editor container */}
-            <div
-                ref={editorRef}
-                className="mp-editor"
-                style={{
-                    width: "100%",
-                    minHeight: "400px",
-                    background: "#f0f0f0",
-                    padding: "20px 0",
-                    overflowY: "auto",
-                }}
-            />
         </div>
     );
 }
